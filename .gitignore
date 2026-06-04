@@ -1,9 +1,0 @@
-.venv/
-__pycache__/
-.ipynb_checkpoints/
-
-data/processed/
-mlruns/
-
-*.pth
-*.pt
