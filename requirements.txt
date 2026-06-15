@@ -1,0 +1,47 @@
+# Core Data Science
+numpy
+pandas
+scipy
+
+# Visualization
+matplotlib
+seaborn
+
+# Machine Learning
+scikit-learn
+xgboost
+
+# Deep Learning
+torch
+torchvision
+
+# NLP / Embeddings
+sentence-transformers
+transformers
+
+# Recommendation System Utilities
+implicit
+
+# OCR
+easyocr
+opencv-python
+Pillow
+
+# YOLO
+ultralytics
+polars
+ultralytics-thop
+
+# Jupyter
+notebook
+jupyterlab
+ipykernel
+
+# Utilities
+tqdm
+pyyaml
+requests
+joblib
+
+# Optional
+openpyxl

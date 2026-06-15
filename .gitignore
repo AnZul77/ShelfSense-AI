@@ -1,3 +1,28 @@
-# Ignore all pickle and PyTorch model files
-*.pkl
+# Virtual environments
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Models
+*.pt
 *.pth
+
+# Outputs
+outputs/
+runs/
+
+# Datasets
+data/bookshelf_yolo/
+data/cv/
+
+# Environment variables
+.env
+
+# Temporary files
+*.tmp
