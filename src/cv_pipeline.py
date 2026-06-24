@@ -211,54 +211,9 @@ def process_shelf_scan(image_path: str, user_id: int, db: Session) -> dict:
         c["ocr_text"] = ocr_item.get("text", "")
         c["ocr_conf"] = ocr_item.get("confidence", 0.0)
         
-    # Filter out crops with short/blank OCR text
-    valid_crops = [c for c in crop_info if c["ocr_text"] and len(c["ocr_text"].strip()) >= 3]
+    # Process all detected book spine crops through Gemma multimodal identification
+    crops_to_process = crop_info
     
-    # Sort valid crops by OCR confidence in descending order
-    valid_crops.sort(key=lambda x: x["ocr_conf"], reverse=True)
-    
-    # Process top 20 most legible crops to maintain fast execution and avoid overloading local Ollama
-    max_crops_to_process = 20
-    crops_to_process = valid_crops[:max_crops_to_process]
-    crops_to_skip = valid_crops[max_crops_to_process:]
-    
-    # Clean up and return UNKNOWN for skipped crops (retaining bounding boxes for heatmap rendering)
-    for c in crops_to_skip:
-        temp_crop_path = c["temp_path"]
-        if os.path.exists(temp_crop_path):
-            os.remove(temp_crop_path)
-        detected_items.append({
-            "box_idx": c["box_idx"],
-            "box": c["box"],
-            "ocr_text": c["ocr_text"],
-            "gemma_title": "UNKNOWN",
-            "gemma_author": "UNKNOWN",
-            "isbn": None,
-            "title": None,
-            "author": None,
-            "match_stage": "None",
-            "match_score": 0
-        })
-        
-    # Also clean up and return UNKNOWN for crops that had no valid OCR text
-    invalid_crops = [c for c in crop_info if not c["ocr_text"] or len(c["ocr_text"].strip()) < 3]
-    for c in invalid_crops:
-        temp_crop_path = c["temp_path"]
-        if os.path.exists(temp_crop_path):
-            os.remove(temp_crop_path)
-        detected_items.append({
-            "box_idx": c["box_idx"],
-            "box": c["box"],
-            "ocr_text": c["ocr_text"],
-            "gemma_title": "UNKNOWN",
-            "gemma_author": "UNKNOWN",
-            "isbn": None,
-            "title": None,
-            "author": None,
-            "match_stage": "None",
-            "match_score": 0
-        })
-        
     print(f"Running Gemma Spine Identification and database matching on {len(crops_to_process)} crops in parallel...")
     
     def process_single_crop(c):
