@@ -37,46 +37,39 @@ def identify_book_with_gemma(image_path: str, ocr_text: str) -> str:
     Uses Ollama's local gemma4:31b-cloud multimodal LLM to identify the book
     based on the crop image and OCR text.
     """
-    prompt = f"""
-You are identifying a book from a bookshelf.
+    ocr_section = f"OCR text extracted from the spine:\n{ocr_text}\n" if ocr_text and ocr_text.strip() else "No OCR text was extracted from this spine.\n"
+    
+    prompt = f"""You are an expert book identifier. You are looking at a cropped image of a single book spine from a bookshelf photo.
 
-OCR text:
+{ocr_section}
+The OCR may contain severe errors, missing letters, or garbled text. Use it as a hint but rely heavily on the IMAGE.
 
-{ocr_text}
+Identification strategy:
+1. Look at the spine IMAGE carefully — colors, fonts, publisher logo, spine design, thickness
+2. Read any visible text on the spine in the image (title, author name, publisher)
+3. Cross-reference with the OCR text
+4. Identify the exact book title and author
 
-The OCR may contain severe mistakes.
+Books on shelves can be ANY genre: contemporary fiction, romance, thriller, mystery, literary fiction, non-fiction, memoir, self-help, fantasy, sci-fi, horror, YA, classics, poetry, humor, etc.
 
-Use BOTH:
-1. The image
-2. The OCR text
+Common popular authors you might encounter include (but are not limited to):
+- Emily Henry, Colleen Hoover, Taylor Jenkins Reid, Sally Rooney
+- Ruth Ware, Liane Moriarty, Marian Keyes, Sophie Kinsella
+- Matt Haig, Fredrik Backman, Dolly Alderton, Gabrielle Zevin
+- Stephen King, Delia Owens, Bonnie Garmus, Madeline Miller
+- Brandon Sanderson, V.E. Schwab, Leigh Bardugo, Rebecca Yarros
+- Ali Hazelwood, Casey McQuiston, Christina Lauren, Talia Hibbert
+- Amor Towles, Celeste Ng, Brit Bennett, Kiley Reid
+- Andy Weir, Blake Crouch, Cixin Liu, N.K. Jemisin
+- James Clear, Brené Brown, Michelle Obama, Matthew McConaughey
 
-Most books belong to fantasy or science fiction authors.
+If you cannot identify the book at all, set title and author to "UNKNOWN".
 
-Examples include:
-Brandon Sanderson
-Terry Pratchett
-Anthony Ryan
-Peter F. Hamilton
-John Gwynne
-Guy Gavriel Kay
-Jay Kristoff
-Andrzej Sapkowski
-Ann Leckie
-Alastair Reynolds
+Return ONLY valid JSON (no extra text before or after):
 
-First reconstruct the likely spine text.
+{{"title":"","author":"","corrected_spine_text":"","reasoning":"","confidence":0}}
 
-Then identify the exact book.
-
-Return ONLY JSON:
-
-{{
-"title":"",
-"author":"",
-"corrected_spine_text":"",
-"reasoning":"",
-"confidence":0
-}}
+confidence should be 0-100 where 100 means absolutely certain.
 """
     try:
         response = ollama.chat(
@@ -112,10 +105,10 @@ def process_shelf_scan(image_path: str, user_id: int, db: Session) -> dict:
     """
     Full CV Pipeline:
     1. YOLOv8 locates book spines (GPU/CUDA accelerated).
-    2. Crops are processed in a separate batch process with PaddleOCR-GPU on CUDA.
-    3. Multimodal Gemma identifies the top 20 crops by OCR confidence in parallel.
-       Spines with very short/no OCR text are skipped to optimize performance.
+    2. Crops are processed in a separate batch process with PaddleOCR on CPU.
+    3. Multimodal Gemma identifies ALL detected crops in parallel.
     4. Database match matches the Gemma output (title/author).
+       Books identified by Gemma but missing from DB are auto-inserted.
     5. Heatmap overlay draws recommendation-colored bounding boxes.
     """
     yolo = get_yolo_model()
@@ -217,6 +210,8 @@ def process_shelf_scan(image_path: str, user_id: int, db: Session) -> dict:
     print(f"Running Gemma Spine Identification and database matching on {len(crops_to_process)} crops in parallel...")
     
     def process_single_crop(c):
+        import re as _re
+        import hashlib as _hashlib
         temp_crop_path = c["temp_path"]
         x1, y1, x2, y2 = c["box"]
         idx = c["box_idx"]
@@ -229,21 +224,35 @@ def process_shelf_scan(image_path: str, user_id: int, db: Session) -> dict:
             
             gemma_title = gemma_book.get("title", "").strip()
             gemma_author = gemma_book.get("author", "").strip()
+            gemma_confidence = gemma_book.get("confidence", 0)
+            
+            # Skip if Gemma couldn't identify anything
+            if not gemma_title or gemma_title == "UNKNOWN":
+                return {
+                    "box_idx": idx,
+                    "box": [x1, y1, x2, y2],
+                    "ocr_text": ocr_text,
+                    "gemma_title": "UNKNOWN",
+                    "gemma_author": "UNKNOWN",
+                    "isbn": None,
+                    "title": None,
+                    "author": None,
+                    "match_stage": "None",
+                    "match_score": 0
+                }
             
             # Open a thread-local SQLite connection
-            from backend.database import SessionLocal
+            from backend.database import SessionLocal, Book
             thread_db = SessionLocal()
             
             # Match against seeded database
             match_res = None
-            if gemma_title and gemma_title != "UNKNOWN":
-                search_query = f"{gemma_title} {gemma_author}"
-                match_res = match_ocr_query(search_query, thread_db)
-                
-            thread_db.close()
+            search_query = f"{gemma_title} {gemma_author}"
+            match_res = match_ocr_query(search_query, thread_db)
             
             if match_res:
                 book = match_res["book"]
+                thread_db.close()
                 return {
                     "box_idx": idx,
                     "box": [x1, y1, x2, y2],
@@ -257,17 +266,45 @@ def process_shelf_scan(image_path: str, user_id: int, db: Session) -> dict:
                     "match_score": match_res["score"]
                 }
             else:
+                # Auto-insert: Gemma identified a book but it's not in the DB
+                # Create a stable book_id from title+author hash
+                norm_title = _re.sub(r"[^a-z0-9]", "", gemma_title.lower())
+                norm_author = _re.sub(r"[^a-z0-9]", "", gemma_author.lower()) if gemma_author else ""
+                book_id = "gemma_" + _hashlib.md5(f"{norm_title}_{norm_author}".encode()).hexdigest()[:12]
+                
+                # Check if we already auto-inserted this book in a prior crop
+                existing = thread_db.query(Book).filter(Book.book_id == book_id).first()
+                if not existing:
+                    try:
+                        new_book = Book(
+                            book_id=book_id,
+                            title=gemma_title,
+                            author=gemma_author if gemma_author != "UNKNOWN" else "",
+                            description="",
+                            genres="",
+                            image_url="",
+                            normalized_title=norm_title,
+                            normalized_author=norm_author
+                        )
+                        thread_db.add(new_book)
+                        thread_db.commit()
+                        print(f"  Auto-inserted: '{gemma_title}' by {gemma_author} [{book_id}]")
+                    except Exception as insert_err:
+                        thread_db.rollback()
+                        print(f"  Auto-insert failed for '{gemma_title}': {insert_err}")
+                
+                thread_db.close()
                 return {
                     "box_idx": idx,
                     "box": [x1, y1, x2, y2],
                     "ocr_text": ocr_text,
                     "gemma_title": gemma_title,
                     "gemma_author": gemma_author,
-                    "isbn": None,
-                    "title": gemma_title if gemma_title != "UNKNOWN" else None,
+                    "isbn": book_id,
+                    "title": gemma_title,
                     "author": gemma_author if gemma_author != "UNKNOWN" else None,
-                    "match_stage": "None",
-                    "match_score": 0
+                    "match_stage": "Stage 5: Gemma Auto-Insert",
+                    "match_score": float(gemma_confidence)
                 }
         except Exception as e:
             print(f"Error processing spine crop index {idx}: {e}")

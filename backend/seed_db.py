@@ -158,7 +158,15 @@ def seed_database():
             print(f"Error seeding master_catalog: {e}")
     else:
         print(f"Warning: {master_cat_path} not found.")
-        
+    # --- 4. Seed Modern Bestsellers from OpenLibrary API ---
+    try:
+        from seed_modern_books import seed_modern_books
+        modern_count = seed_modern_books()
+        print(f"Added {modern_count} modern bestsellers from OpenLibrary API.")
+    except Exception as e:
+        print(f"Warning: Modern book seeding failed: {e}")
+        print("You can run it separately: python backend/seed_modern_books.py")
+
     final_count = db.query(Book).count()
     print(f"Database seeding completed successfully! Total books in DB: {final_count}")
     db.close()
