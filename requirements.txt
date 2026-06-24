@@ -43,5 +43,17 @@ pyyaml
 requests
 joblib
 
+# API & Database
+fastapi
+uvicorn
+sqlalchemy
+python-multipart
+pydantic
+ollama
+
+# OCR Engine
+paddleocr
+paddlepaddle
+
 # Optional
 openpyxl
