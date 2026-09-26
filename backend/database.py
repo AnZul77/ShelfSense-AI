@@ -4,15 +4,30 @@ import json
 from sqlalchemy import create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, Index
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
-# Determine Database URL: fall back to SQLite locally
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///c:/Users/anshu/Documents/codes/ML/BookRecomendation/backend/bookshelf.db")
+# Determine Database URL: fall back to SQLite locally relative to backend folder
+raw_db_url = os.getenv("DATABASE_URL")
+if not raw_db_url:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    sqlite_file = os.path.join(base_dir, "bookshelf.db").replace("\\", "/")
+    DATABASE_URL = f"sqlite:///{sqlite_file}"
+else:
+    # Normalize postgres:// to postgresql:// for SQLAlchemy 1.4+ / 2.0+
+    if raw_db_url.startswith("postgres://"):
+        DATABASE_URL = raw_db_url.replace("postgres://", "postgresql://", 1)
+    else:
+        DATABASE_URL = raw_db_url
 
-# For SQLite, enable check_same_thread=False
-connect_args = {}
+# Configure engine parameters
+engine_kwargs = {}
 if DATABASE_URL.startswith("sqlite"):
-    connect_args["check_same_thread"] = False
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+else:
+    # PostgreSQL connection pooling
+    engine_kwargs["pool_size"] = 10
+    engine_kwargs["max_overflow"] = 20
+    engine_kwargs["pool_recycle"] = 1800
 
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+engine = create_engine(DATABASE_URL, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 

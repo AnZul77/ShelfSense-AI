@@ -38,11 +38,12 @@ _book2idx = None
 _user2idx = None
 _idx2book = None
 _idx2user = None
+_item_top_neighbors = None
 _item_similarity_df = None
 _train_df = None
 
 def load_collaborative_assets():
-    global _bpr_model, _bpr_config, _book2idx, _user2idx, _idx2book, _idx2user, _item_similarity_df, _train_df
+    global _bpr_model, _bpr_config, _book2idx, _user2idx, _idx2book, _idx2user, _item_top_neighbors, _item_similarity_df, _train_df
     
     if _bpr_model is not None:
         return
@@ -93,14 +94,18 @@ def load_collaborative_assets():
     _bpr_model.to(device)
     _bpr_model.eval()
     
-    # Item-Similarity Dataframe (optional/ignored in Git)
+    # Item-Similarity Fast Top Neighbors (Fast ~11MB vs 649MB DataFrame)
+    top_neighbors_path = os.path.join(MODELS_DIR, "item_top_neighbors.pkl")
     similarity_path = os.path.join(MODELS_DIR, "item_similarity_df.pkl")
-    if os.path.exists(similarity_path):
+
+    if os.path.exists(top_neighbors_path):
+        with open(top_neighbors_path, "rb") as f:
+            _item_top_neighbors = pickle.load(f)
+    elif os.path.exists(similarity_path):
         with open(similarity_path, "rb") as f:
             _item_similarity_df = pickle.load(f)
     else:
-        print("Warning: item_similarity_df.pkl not found. Item-based collaborative recommendations will be disabled.")
-        _item_similarity_df = None
+        print("Warning: Item similarity assets not found. Item-based collaborative recommendations will be disabled.")
         
     # Train DF (for ratings CF)
     train_df_path = os.path.join(DATA_DIR, "processed", "train_df.csv")
@@ -191,7 +196,7 @@ def get_cf_recommendations(user_id, rated_books=None, top_k=100, k=10):
                     "rating": row["Rating"]
                 })
                 
-    if not user_ratings or _item_similarity_df is None:
+    if not user_ratings or (_item_top_neighbors is None and _item_similarity_df is None):
         return []
         
     scores = defaultdict(float)
@@ -201,17 +206,24 @@ def get_cf_recommendations(user_id, rated_books=None, top_k=100, k=10):
         isbn = r["isbn"]
         rating = r["rating"]
         
-        # Map ISBN to BPR book_idx because item_similarity_df uses book_idx (0 to 9008)
+        # Map ISBN to book_idx
         book_idx = _book2idx.get(isbn)
-        if book_idx is None or book_idx not in _item_similarity_df.index:
+        if book_idx is None:
             continue
             
-        # Get k nearest neighbors
-        neighbors = _item_similarity_df[book_idx].sort_values(ascending=False).iloc[1:k+1]
-        for sim_book, sim_score in neighbors.items():
-            sim_isbn = _idx2book.get(sim_book)
-            if sim_isbn and sim_isbn not in already_read:
-                scores[sim_isbn] += sim_score * rating
+        # Fast dictionary lookup if available
+        if _item_top_neighbors is not None:
+            neighbors = _item_top_neighbors.get(book_idx, [])[:k]
+            for sim_book, sim_score in neighbors:
+                sim_isbn = _idx2book.get(sim_book)
+                if sim_isbn and sim_isbn not in already_read:
+                    scores[sim_isbn] += sim_score * rating
+        elif _item_similarity_df is not None and book_idx in _item_similarity_df.index:
+            neighbors = _item_similarity_df[book_idx].sort_values(ascending=False).iloc[1:k+1]
+            for sim_book, sim_score in neighbors.items():
+                sim_isbn = _idx2book.get(sim_book)
+                if sim_isbn and sim_isbn not in already_read:
+                    scores[sim_isbn] += sim_score * rating
                 
     recs = [(isbn, score) for isbn, score in scores.items()]
     recs.sort(key=lambda x: x[1], reverse=True)

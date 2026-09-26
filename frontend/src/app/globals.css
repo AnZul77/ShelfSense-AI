@@ -1,26 +1,61 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: #0d0f14;
+  --foreground: #f3f4f6;
+  --card-bg: #141720;
+  --card-border: #232838;
+  --accent-gold: #d97706;
+  --accent-amber: #f59e0b;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: #0b0d12;
+  color: #f1f3f7;
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+}
+
+/* Custom literary serif utility */
+.font-serif-title {
+  font-family: var(--font-serif), Georgia, Cambria, serif;
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0f1219;
+}
+::-webkit-scrollbar-thumb {
+  background: #252b3d;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3b445e;
+}
+
+/* Book Cover 3D lighting shadow */
+.book-cover-shadow {
+  box-shadow: 
+    0 10px 25px -5px rgba(0, 0, 0, 0.6),
+    0 8px 10px -6px rgba(0, 0, 0, 0.5),
+    inset -1px 0 2px rgba(255, 255, 255, 0.1),
+    inset 2px 0 4px rgba(0, 0, 0, 0.4);
+}
+
+.book-spine-effect {
+  position: relative;
+}
+.book-spine-effect::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 5px;
+  background: linear-gradient(90deg, rgba(255,255,255,0.15) 0%, rgba(0,0,0,0.3) 100%);
+  pointer-events: none;
 }

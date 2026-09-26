@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OLLAMA_HOST=http://ollama:11434
+      - JWT_SECRET=shelfsense_production_jwt_secret_2026
+      # Default: SQLite volume mounted below. For PostgreSQL, set:
+      # - DATABASE_URL=postgresql://shelfsense:shelfsense123@db:5432/shelfsensedb
+    volumes:
+      - ./backend/bookshelf.db:/app/backend/bookshelf.db
+      - ./backend/uploads:/app/backend/uploads
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+
+  db:
+    image: postgres:15-alpine
+    profiles: ["postgres"]
+    environment:
+      - POSTGRES_USER=shelfsense
+      - POSTGRES_PASSWORD=shelfsense123
+      - POSTGRES_DB=shelfsensedb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  ollama_models:
+  pgdata:

@@ -1,44 +1,75 @@
 # ShelfSense AI 📚✨
 
-> **Bookstore Shelf Scan & Personalized Book Recommendation Platform**
+> **AI-Powered Bookstore Shelf Scanner & Hybrid Book Recommendation Engine**
 
-ShelfSense AI is a portfolio-grade, production-quality AI-powered bookstore recommendation platform designed to help readers discover books while browsing physical bookstore shelves. 
+ShelfSense AI is a production-grade, portfolio-ready AI system designed to help readers discover books while browsing physical bookstore shelves. 
 
-A user selects their reading preferences (onboarding). They then take a photo of a bookstore shelf. The CV pipeline detects the book spines, runs high-performance OCR, uses a local Large Language Model (LLM) to correct OCR errors and identify titles/authors, matches them to a local SQLite catalog database, and recommends which books the user is most likely to enjoy based on their Reading DNA.
+A user configures their personal taste profile during onboarding. When they photograph a physical bookstore shelf, the computer vision pipeline detects book spines, runs optical character recognition (OCR) in an isolated subprocess, resolves ambiguous titles using a local Vision LLM (Ollama), matches detected spines against a local catalog of over 291,000 works, and computes personalized Buy Fit scores and contextual reading rationale based on the user's Reading DNA.
+
+---
+
+## 📦 Large Datasets & Model Assets (Google Drive)
+
+All raw datasets, processed CSVs, and the complete SQLite catalog database can be downloaded directly from Google Drive:
+
+👉 **[Download Project Datasets & Database Assets (Google Drive)](https://drive.google.com/drive/folders/14DByZOEQ50B4p4sECdbsQFWJ_-Oz4P1q?usp=sharing)**
+
+To use the pre-built database and datasets:
+1. Download the files from the Google Drive link above.
+2. Place `bookshelf.db` in `backend/bookshelf.db`.
+3. Extract `data/` into the project root directory.
 
 ---
 
 ## 🏗️ System Architecture
 
-ShelfSense AI integrates computer vision, deep learning, natural language processing, vector search, and web technologies into a clean, modern application.
-
 ```mermaid
 graph TD
-    A[Next.js 15 Frontend Client] -->|1. Uploads Bookstore Image| B(FastAPI Backend Server)
+    A[Next.js 14 Web Client] -->|1. Multipart Shelf Photo Upload| B(FastAPI Backend Server)
     B -->|2. Detects Spines| C[YOLOv8 Spine Detector]
-    C -->|3. Extracts Crop Images| B
+    C -->|3. Extracts Spines| B
     B -->|4. Runs OCR in Subprocess| D[PaddleOCR Engine CPU]
-    D -->|5. Returns Raw Text| B
-    B -->|6. Resolves Book Title & Author| E[Ollama Gemma 2 31B Multimodal]
-    E -->|7. Corrects Transcription Errors| B
-    B -->|8. Matches Candidates| F[(SQLite Catalog DB / FAISS)]
-    F -->|9. Returns Matched Book Entities| B
-    B -->|10. Computes Hybrid Recommendations| G[BPR CF + Content-Based + Popularity]
-    G -->|11. Exposes Buy Scores & Explanations| B
-    B -->|12. Returns Bounding Boxes & Recs JSON| A
+    D -->|5. Returns Extracted Text| B
+    B -->|6. Resolves Ambiguous Spines| E[Ollama Gemma 3 4B Multimodal]
+    E -->|7. Disambiguates Title & Author| B
+    B -->|8. Matches Book Entities| F[(SQLite / PostgreSQL Catalog)]
+    F -->|9. On-the-Fly Metadata Enrichment| H[OpenLibrary Works API]
+    H -->|10. Caches Cover, Synopsis, Genres| F
+    B -->|11. Computes Hybrid Recommendations| G[Calibrated MiniLM + BPR + Top-K CF]
+    G -->|12. Buy Fit Scores & Explanations| B
+    B -->|13. Shelf Heatmap Overlay & Recs JSON| A
 ```
 
-### 🔬 Core Components & Tech Stack
+---
 
-1. **Frontend**: Next.js 15, React, and TailwindCSS, featuring a clean dark-mode interface, drag-and-drop shelf scanner, dynamic canvas bounding-box viewer, and detailed recommendation screens.
-2. **Backend**: FastAPI (Python 3.10+), SQLAlchemy ORM, and SQLite.
-3. **Computer Vision**: YOLOv8 (nano) trained on a custom book spine bounding-box dataset.
-4. **OCR**: PaddleOCR (CPU-based) batching, optimized to avoid PyTorch GPU resource contention on Windows and to automatically handle vertical and rotated text.
-5. **Entity Identification**: Ollama local multimodal inference using `gemma2:27b` / `gemma4:31b-cloud` to resolve book metadata from noisy OCR outputs and spine images.
-6. **Recommendation Engines**:
-   - **Collaborative Filtering (BPR)**: PyTorch-implemented Bayesian Personalized Ranking model trained on Book-Crossing ratings.
-   - **Content-Based Filtering**: Sentence-Transformers embeddings with cosine similarity neighbors cached locally.
-   - **Popularity & Genre DNA Booster**: Blends popularity statistics and matches the candidate book's genres against the user's computed **Reading DNA** profile.
+## 🔬 Core Components & Technical Innovations
+
+1. **Computer Vision & Spine Detection**:
+   - Custom **YOLOv8x** model (`runs/detect/train/weights/best.pt`, 6.2MB) trained on physical bookstore shelves.
+   - Dynamic shelf heatmap generator color-coding detected spines by score (Green: Buy Fit $\ge 80\%$, Yellow: Consider $\ge 50\%$, Red: Low $< 50\%$, Orange: Already Read).
+
+2. **Subprocess-Isolated OCR Pipeline**:
+   - **PaddleOCR Mobile V4** runs in an isolated CPU subprocess (`src/ocr_subprocess.py`) with vertical character collapsing, eliminating PyTorch GPU C++ runtime thread collisions on Windows.
+
+3. **Multimodal Disambiguation**:
+   - **Ollama `gemma3:4b`** vision model handles angled, low-contrast, or stylized spines.
+   - **Fast-Path OCR Matcher**: Resolves clean text directly in $< 5\text{ms}$; ambiguous spines are routed to Gemma with graceful fallback.
+   - **False-Positive Elimination**: 4-stage matcher enforces string length penalties to eliminate single-word false matches (e.g. the *"Flu"* trap).
+
+4. **Calibrated Hybrid Recommendation Engine**:
+   - **MiniLM Semantic Embeddings**: `all-MiniLM-L6-v2` produces 384-dimensional $L_2$-normalized vectors indexed in FAISS (`IndexFlatIP`).
+   - **Cosine Calibration**: Raw dot products are mathematically mapped to reader match percentages ($0\% \text{--} 100\%$).
+   - **Active-Channel Reweighting**: Solves the cold-start problem for modern books (post-2004) lacking historical Book-Crossing interaction data by dynamically reallocating weight across observable semantic, genre, and author signals.
+   - **Compound Genre Matching**: Tokenized matching resolves compound and hyphenated genres (`epic_fantasy` $\to$ `fantasy`, `hard science-fiction` $\to$ `science fiction`).
+   - **Item-Item Collaborative Filtering**: Compact 11.8MB Top-K nearest neighbor graph (`models/item_top_neighbors.pkl`, load time $< 0.2\text{s}$).
+   - **Neural BPR**: Bayesian Personalized Ranking matrix factorization.
+
+5. **Organic Catalog Expansion**:
+   - When a user scans or searches for a modern release not present in Book-Crossing, [`src/enrichment.py`](src/enrichment.py) queries OpenLibrary's Search & Works APIs to fetch official plot synopses, genres, and high-resolution cover art on-the-fly.
+
+6. **Production Security & Database Agnosticism**:
+   - **JWT Authentication**: Cryptographic HMAC-SHA256 (`HS256`) tokens with 30-day expiration and RFC 7519 payload claims.
+   - **Dual Database Engine**: Local zero-config SQLite (`bookshelf.db`) + production PostgreSQL support with connection pooling (`pool_size=10`, `max_overflow=20`).
 
 ---
 
@@ -46,142 +77,121 @@ graph TD
 
 ```
 ├── backend/
-│   ├── database.py             # SQLAlchemy models & schema definitions
-│   ├── main.py                 # FastAPI API endpoints & auth handlers
-│   ├── seed_db.py              # Catalog seeding script
-│   ├── verify_recommender.py   # Recommendation pipeline verification
+│   ├── database.py             # SQLAlchemy models & dual engine (SQLite / PostgreSQL)
+│   ├── main.py                 # FastAPI API endpoints & signed JWT auth
+│   ├── bookshelf.db            # SQLite catalog database (291k+ books)
 │   └── uploads/                # Directory for user uploads & overlays (gitignored)
-├── frontend/                   # Next.js 15 React application
-│   ├── src/app/                # React pages, layouts, and styles
-│   ├── package.json            # Node dependency list
-│   └── next.config.ts          # Next.js configuration
-├── models/                     # Small model binaries, weights, and CSV metadata
+├── frontend/                   # Next.js 14 App Router application
+│   ├── src/app/
+│   │   ├── browse/             # Searchable catalog explorer with OpenLibrary fallback
+│   │   ├── dashboard/          # Reading DNA radar & wishlist dashboard
+│   │   ├── onboarding/         # Reader taste profile calibration carousel
+│   │   ├── recommendations/    # Dual-panel shelf heatmap & scored book cards
+│   │   └── scan/               # Drag-and-drop shelf scanner studio
+│   ├── src/components/         # Navbar, Footer, and UI components
+│   └── package.json            # Node dependency list
+├── models/                     # Model binaries, configs, and manifests
+│   ├── item_top_neighbors.pkl  # Fast item-item similarity graph (11.8MB)
 │   ├── bpr_model.pth           # Trained BPR weights (3.0MB)
-│   ├── bpr_config.pth          # BPR config hyperparameters
 │   ├── book_embeddings.npy     # FAISS embeddings (9.4MB)
-│   └── book_catalog.csv        # OpenLibrary seeded catalog (12.7MB)
-├── notebooks/                  # Jupyter notebooks documenting EDA & model training
+│   ├── book_catalog.csv        # Curated catalog (12.7MB)
+│   └── model_manifest.json     # Formal MLOps model registry manifest
+├── notebooks/                  # Jupyter notebooks documenting EDA & model training (01 - 12)
 ├── runs/
-│   └── detect/train/weights/   # Trained YOLOv8 spine detection weights
-│       └── best.pt             # Bounding-box model (6.2MB)
+│   └── detect/train/weights/   # Trained YOLOv8 spine detection weights (best.pt, 6.2MB)
 ├── src/                        # Core Python library
-│   ├── collaborative.py        # Collaborative filtering models
-│   ├── content_based.py        # Embedding similarity queries
+│   ├── collaborative.py        # Item-Item CF & BPR loaders
+│   ├── content_based.py        # FAISS search & calibrated embeddings
 │   ├── cv_pipeline.py          # YOLO + PaddleOCR + Ollama pipeline
-│   ├── hybrid.py               # Blended recommendation scoring & explanations
-│   ├── ocr_subprocess.py       # Standalone PaddleOCR CPU batch executor
-│   └── numpy_compat.py         # NumPy pickle deserialization adapter
-├── requirements.txt            # Python environment dependencies
-└── .gitignore                  # Git tracking exclusions
+│   ├── enrichment.py           # On-the-fly OpenLibrary metadata enricher
+│   ├── hybrid.py               # Calibrated hybrid recommendation engine
+│   ├── matching.py             # 4-stage deterministic catalog matcher
+│   ├── mlops_eval.py           # Offline evaluation & persona benchmark suite
+│   ├── numpy_compat.py         # NumPy 2.x pickling compatibility adapter
+│   └── ocr_subprocess.py       # Isolated PaddleOCR CPU batch executor
+├── tests/                      # Automated unit test suite (19 tests)
+├── .github/workflows/ci.yml    # GitHub Actions continuous integration workflow
+├── docker-compose.yml          # Multi-container orchestration (Backend, Frontend, Ollama, Postgres)
+├── requirements.txt            # Python dependencies
+├── start_backend.bat           # 1-click Windows backend launcher
+└── start_frontend.bat          # 1-click Windows frontend launcher
 ```
 
 ---
 
-## ⚡ Setup & Installation
+## ⚡ Quick Start
 
-### Prerequisites
+### Option 1: Native Windows / Local Setup
 
-- **Python 3.10+**
+#### Prerequisites
+- **Python 3.11+**
 - **Node.js 18+**
-- **Ollama** (locally running instance)
-- **CUDA Toolkit** (Optional, but highly recommended for fast YOLOv8 inference)
+- **Ollama** running locally with `gemma3:4b` (`ollama run gemma3:4b`)
 
-### 1. Ollama Setup
+#### 1. Setup Python Backend
+```powershell
+# Create and activate virtual environment
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 
-Install [Ollama](https://ollama.com/) and download the multimodal model used for spine entity resolution:
-```bash
-ollama pull gemma2:27b
+# Install dependencies
+pip install -r requirements.txt
 ```
-*(Make sure the Ollama server is running locally on port `11434` before starting the backend).*
 
-### 2. Python Backend Setup
+#### 2. Start Services
+- **Backend**: Double-click `start_backend.bat` or run:
+  ```powershell
+  uvicorn backend.main:app --reload --port 8000
+  ```
+  API Docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-1. **Create and Activate a Virtual Environment**:
-   ```bash
-   # Windows Powershell
-   python -m venv .venv
-   .venv\Scripts\Activate.ps1
-   
-   # Linux/macOS
-   python3 -m venv .venv
-   source .venv/bin/activate
-   ```
-
-2. **Install Backend Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Seed the SQLite Database**:
-   Seeding the database builds a local SQLite database (`backend/bookshelf.db`) and seeds it with over 6,100 high-quality books and authors from `models/book_catalog.csv` (OpenLibrary):
-   ```bash
-   python backend/seed_db.py
-   ```
-
-4. **Verify the Recommender Pipeline**:
-   Ensure that the recommendation models are loaded and running correctly by running the verification test script:
-   ```bash
-   python backend/verify_recommender.py
-   ```
-
-### 3. Next.js Frontend Setup
-
-1. Open a new terminal window, navigate to the `frontend/` directory:
-   ```bash
-   cd frontend
-   ```
-
-2. **Install Node Packages**:
-   ```bash
-   npm install
-   ```
+- **Frontend**: Double-click `start_frontend.bat` or run:
+  ```powershell
+  cd frontend
+  npm install
+  npm run dev
+  ```
+  Web UI: [http://localhost:3000](http://localhost:3000)
 
 ---
 
-## 🚀 Running the Project
+### Option 2: Production Docker Orchestration
 
-### Start the FastAPI Backend
+Launch the full stack (FastAPI backend, Next.js frontend, and Ollama) with a single command:
 
-From the project root (with `.venv` activated):
 ```bash
-uvicorn backend.main:app --reload --port 8000
+docker compose up --build
 ```
-- Interactive Swagger docs will be available at: [http://localhost:8000/docs](http://localhost:8000/docs)
-- Redoc API documentation: [http://localhost:8000/redoc](http://localhost:8000/redoc)
 
-### Start the Next.js Frontend
-
-From the `frontend/` directory:
+To enable managed PostgreSQL instead of SQLite:
 ```bash
-npm run dev
+docker compose --profile postgres up --build
 ```
-Open your browser to [http://localhost:3000](http://localhost:3000) to access the ShelfSense AI web dashboard.
 
 ---
 
-## ⚙️ Git Tracking & Deployment Details
+## 🧪 Testing & MLOps Verification
 
-To prevent exceeding GitHub repository storage limits, the project is configured to exclude heavy assets, logs, database files, and local caches.
+### Automated Unit Test Suite (19 / 19 Passed)
+```powershell
+.venv\Scripts\pytest.exe tests/ -v
+```
 
-The following files are **tracked** in Git:
-- Complete frontend React files, backend routing handlers, and Python recommender code (`src/` and `backend/`).
-- Jupyter notebooks inside the `notebooks/` directory.
-- Model configs, lookup indexes, and metadata under `models/` (under 15MB each).
-- The custom-trained book spine YOLOv8 detector weights (`runs/detect/train/weights/best.pt`, ~6.2MB).
+| Test Module | Coverage | Status |
+| :--- | :--- | :---: |
+| `tests/test_api.py` | API health, search, register/login, profile, JWT token structure | **PASSED** |
+| `tests/test_database.py` | User creation, ratings, shelf scan schema | **PASSED** |
+| `tests/test_matching.py` | Normalization, keywords, exact match, "Flu" trap avoidance | **PASSED** |
+| `tests/test_recommendation.py` | CF neighbors, BPR cold start, score normalization, Reading DNA | **PASSED** |
 
-The following files are **gitignored**:
-- The main SQLite database file (`backend/bookshelf.db`, ~112MB) — dynamically generated during seeding.
-- Heavy collaborative filtering item-similarity matrices (`models/item_similarity_df.pkl`, ~649MB).
-- Raw and processed datasets (`data/raw/`, `data/processed/`).
-- Bounding box annotations and crop output files (`outputs/`).
-- Frontend Node modules and build files (`node_modules/`, `.next/`).
-- Virtual environments (`.venv/`, `venv/`).
-
-> [!NOTE]
-> The hybrid recommender is programmed to automatically bypass item-based collaborative filtering if `item_similarity_df.pkl` is missing. It will gracefully compute recommendations using BPR factor scores, genre matches, and content-based embedding neighbors so the app remains fully functional on a clean clone.
+### Offline Persona Benchmark Suite
+```powershell
+.venv\Scripts\python.exe src/mlops_eval.py
+```
+Benchmarks model loading latency, FAISS vector indexing, GPU inference speeds, and verifies persona calibration across Fantasy, Sci-Fi, and out-of-domain literature.
 
 ---
 
 ## 📝 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+Distributed under the MIT License. See `LICENSE` for details.

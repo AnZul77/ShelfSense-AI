@@ -1,4 +1,9 @@
 import os
+import sys
+# Initialize compatibility layer
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import src.numpy_compat
+
 import re
 import pickle
 import numpy as np
@@ -86,29 +91,45 @@ def get_book_embedding_by_isbn(isbn: str, db: Session) -> np.ndarray:
     # In books_master, find title/author of this ISBN to search in book_catalog
     book_record = db.query(Book).filter(Book.book_id == isbn).first()
     if book_record:
-        # Search book_catalog by title
+        # Normalize and clean title to match catalog (e.g. remove "(Leatherette Edition)")
+        clean_title = re.sub(r"\(.*?\)|\[.*?\]", "", book_record.title).strip().lower()
         title_lower = book_record.title.lower().strip()
         author_lower = book_record.author.lower().strip() if book_record.author else ""
         
+        # 1. Check exact match in catalog
         match_idx = _book_catalog[
             (_book_catalog["title"].str.lower().str.strip() == title_lower) & 
             (_book_catalog["author"].str.lower().str.strip() == author_lower)
         ].index
         
+        # 2. Check clean title match in catalog
+        if len(match_idx) == 0:
+            match_idx = _book_catalog[
+                _book_catalog["title"].str.lower().str.strip() == clean_title
+            ].index
+            
         if len(match_idx) > 0:
             idx = match_idx[0]
             if idx < len(_book_embeddings):
                 return _book_embeddings[idx]
         
-        # Fallback: if we have metadata, compile combined text and embed
-        comb_text = f"{book_record.title} {book_record.author} {book_record.genres or ''} {book_record.description or ''}"
+        # 3. If book lacks synopsis/genres, auto-enrich it from OpenLibrary
+        if not book_record.description or not book_record.genres:
+            try:
+                from src.enrichment import enrich_book_in_db
+                enrich_book_in_db(book_record, db)
+            except Exception:
+                pass
+                
+        # 4. Fallback: compile combined text and embed
+        comb_text = f"{clean_title} {book_record.author or ''} {book_record.genres or ''} {book_record.description or ''}".strip()
     else:
         comb_text = isbn
 
     # Generate on-the-fly
     model = get_sentence_model()
-    emb = model.encode(comb_text)
-    return emb
+    emb = model.encode(comb_text, normalize_embeddings=True)
+    return emb.astype("float32")
 
 def generate_user_taste_vector(rated_books: list, db: Session) -> np.ndarray:
     """
@@ -196,22 +217,21 @@ def get_genre_overlap_score(user_genres_pref: dict, candidate_genres: str) -> fl
     """
     if not candidate_genres or not user_genres_pref:
         return 0.0
-        
-    # Split candidate genres (can be pipe or comma separated)
-    c_genres = {g.strip().lower() for g in re.split(r"[|,;]", candidate_genres) if g.strip()}
-    if not c_genres:
+    # Clean candidate genres: replace hyphens, underscores, and punctuation
+    raw_tokens = [g.strip().lower() for g in re.split(r"[|,;]", candidate_genres) if g.strip()]
+    if not raw_tokens:
         return 0.0
         
-    overlap_score = 0.0
-    matches = 0
-    
-    for g in c_genres:
-        if g in user_genres_pref:
-            overlap_score += user_genres_pref[g]
-            matches += 1
-            
-    if matches == 0:
-        return 0.0
-        
-    # Normalized score by count of candidate genres to prevent long lists from dominating
-    return overlap_score / len(c_genres)
+    best_match = 0.0
+    for cand_g in raw_tokens:
+        clean_cand = re.sub(r"[^a-z0-9\s]", " ", cand_g).strip()
+        cand_words = set(clean_cand.split())
+        for ug, weight in user_genres_pref.items():
+            clean_ug = re.sub(r"[^a-z0-9\s]", " ", ug).strip()
+            ug_words = set(clean_ug.split())
+            # Match exact, substring, or token overlap (e.g. fantasy in epic fantasy, sci-fi in science fiction)
+            if ug in clean_cand or clean_cand in ug or (ug_words & cand_words):
+                if weight > best_match:
+                    best_match = weight
+                    
+    return float(best_match)

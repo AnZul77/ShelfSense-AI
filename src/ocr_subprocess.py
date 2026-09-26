@@ -68,9 +68,13 @@ def main():
 
         # Run OCR directly (PaddleOCR handles rotated/vertical spines natively with use_angle_cls)
         text, conf = run_ocr(ocr_engine, img)
+        cleaned_str = text.strip()
+        # Collapse single-letter vertical spacing: "B R A N D O N" -> "BRANDON"
+        import re
+        collapsed = re.sub(r'(?<=\b[A-Za-z0-9])\s+(?=[A-Za-z0-9]\b)', '', cleaned_str)
 
         results[path] = {
-            "text": text.strip().upper(),
+            "text": collapsed.strip(),
             "confidence": conf
         }
         

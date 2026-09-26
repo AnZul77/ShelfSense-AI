@@ -21,6 +21,8 @@ transformers
 
 # Recommendation System Utilities
 implicit
+faiss-cpu
+rapidfuzz
 
 # OCR
 easyocr
@@ -50,10 +52,15 @@ sqlalchemy
 python-multipart
 pydantic
 ollama
+pyjwt
+bcrypt
 
 # OCR Engine
 paddleocr
 paddlepaddle
+
+# Testing
+pytest
 
 # Optional
 openpyxl

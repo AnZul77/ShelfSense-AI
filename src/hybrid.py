@@ -138,10 +138,12 @@ def hybrid_recommend_shelf(user_id: int, shelf_isbns: list, db: Session, weights
         book_emb = get_book_embedding_by_isbn(isbn, db)
         semantic_sim = 0.0
         if book_emb is not None and user_taste_vector is not None:
-            # Cosine similarity (since both are normalized)
-            semantic_sim = float(np.dot(user_taste_vector, book_emb))
-            # Clip to [0, 1]
-            semantic_sim = max(0.0, min(1.0, semantic_sim))
+            # Cosine similarity (since both are unit normalized)
+            raw_sim = float(np.dot(user_taste_vector, book_emb))
+            # Calibrate similarity: MiniLM cosine space baseline is ~0.08 for unrelated texts,
+            # while 0.58+ indicates strong thematic convergence.
+            calibrated_sim = (raw_sim - 0.08) / (0.58 - 0.08)
+            semantic_sim = max(0.0, min(1.0, calibrated_sim))
             
         genre_overlap = get_genre_overlap_score(user_genres_pref, book.genres)
         content_score = 0.7 * semantic_sim + 0.3 * genre_overlap
@@ -159,12 +161,26 @@ def hybrid_recommend_shelf(user_id: int, shelf_isbns: list, db: Session, weights
         popularity_score = np.log1p(pop_count) / np.log1p(_max_popularity)
         
         # E. Final Hybrid Weighted Score
-        final_score = (
-            weights["collaborative"] * collab_score +
-            weights["content"] * content_score +
-            weights["author"] * author_score +
-            weights["popularity"] * popularity_score
-        )
+        # Check if the book has historical collaborative interaction data
+        has_collab_data = (bpr_val > 0.0 or cf_val > 0.0)
+        if has_collab_data:
+            final_score = (
+                weights["collaborative"] * collab_score +
+                weights["content"] * content_score +
+                weights["author"] * author_score +
+                weights["popularity"] * popularity_score
+            )
+        else:
+            # Modern / Cold-Start Book (e.g. published after 2004 without Book-Crossing interaction data):
+            # Dynamically normalize weights across observable signals (Content, Author Affinity, Popularity)
+            if author_score > 0.0 and popularity_score > 0.0:
+                final_score = 0.60 * content_score + 0.30 * author_score + 0.10 * popularity_score
+            elif author_score > 0.0:
+                final_score = 0.70 * content_score + 0.30 * author_score
+            elif popularity_score > 0.0:
+                final_score = 0.85 * content_score + 0.15 * popularity_score
+            else:
+                final_score = content_score
         
         # F. Buy Score (0-100)
         buy_score = int(final_score * 100)
@@ -191,13 +207,25 @@ def hybrid_recommend_shelf(user_id: int, shelf_isbns: list, db: Session, weights
                         
         if best_match_sim > 0.45 and best_match_title:
             explanation += f"Similar themes to '{best_match_title}'. "
-        elif genre_overlap > 0.3:
-            # Genre overlap check
-            # Find the top matching genre
+        elif genre_overlap > 0.2 and book.genres:
+            # Flexible genre overlap check
             cand_genres = [g.strip().lower() for g in re.split(r"[|,;]", book.genres) if g.strip()]
-            matching_genres = [g for g in cand_genres if g in user_genres_pref]
-            if matching_genres:
-                explanation += f"Matches your reading interest in {matching_genres[0].capitalize()}. "
+            found_genre = None
+            for cand_g in cand_genres:
+                clean_cand = re.sub(r"[^a-z0-9\s]", " ", cand_g).strip()
+                cand_words = set(clean_cand.split())
+                for ug in user_genres_pref:
+                    clean_ug = re.sub(r"[^a-z0-9\s]", " ", ug).strip()
+                    ug_words = set(clean_ug.split())
+                    if ug in clean_cand or clean_cand in ug or (ug_words & cand_words):
+                        found_genre = ug.title()
+                        break
+                if found_genre:
+                    break
+            if found_genre:
+                explanation += f"Matches your reading interest in {found_genre}. "
+            else:
+                explanation += "Complements your profile and popular ratings."
         else:
             explanation += "Complements your profile and popular ratings."
             
@@ -226,19 +254,43 @@ def get_reading_dna(user_id: int, db: Session) -> dict:
         
     genre_counts = defaultdict(int)
     total_genres = 0
+    rated_books = []
     
     for r in user_ratings:
         book = db.query(Book).filter(Book.book_id == r.book_id).first()
-        if book and book.genres:
-            # Parse genres
-            for g in re.split(r"[|,;]", book.genres):
-                g_clean = g.strip().capitalize()
-                if g_clean:
-                    genre_counts[g_clean] += 1
+        if book:
+            rated_books.append(book)
+            if book.genres:
+                # Parse genres
+                for g in re.split(r"[|,;]", book.genres):
+                    g_clean = g.strip().capitalize()
+                    if g_clean:
+                        genre_counts[g_clean] += 1
+                        total_genres += 1
+                        
+    # If no explicit genres were tagged in dataset, infer from title and description
+    if total_genres == 0 and rated_books:
+        genre_heuristics = {
+            "Fantasy & Sci-Fi": ["fantasy", "dragon", "magic", "sword", "witch", "wizard", "galaxy", "space", "alien", "robot", "cyber", "star", "kings", "mistborn", "stormlight"],
+            "Mystery & Thriller": ["mystery", "thriller", "murder", "detective", "crime", "secret", "killer", "clue", "spy", "investigation", "suspense"],
+            "Historical & Epic": ["historical", "century", "war", "empire", "revolution", "medieval", "kingdom", "chronicle"],
+            "Literary Fiction": ["novel", "story", "life", "world", "journey", "memoir", "poetry", "classic", "literature"],
+            "Philosophy & Mind": ["philosophy", "mind", "psychology", "thought", "human", "guide", "art", "wisdom"]
+        }
+        for b in rated_books:
+            text = f"{b.title or ''} {b.description or ''}".lower()
+            matched_any = False
+            for cat, keywords in genre_heuristics.items():
+                if any(kw in text for kw in keywords):
+                    genre_counts[cat] += 1
                     total_genres += 1
-                    
+                    matched_any = True
+            if not matched_any:
+                genre_counts["Fiction & Literature"] += 1
+                total_genres += 1
+
     if total_genres == 0:
-        return {}
+        return {"Fiction & Literature": 65.0, "Contemporary": 35.0}
         
     # Convert to percentages
     reading_dna = {}

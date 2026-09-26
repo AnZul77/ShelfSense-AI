@@ -1,0 +1,76 @@
+{
+  "manifest_version": "1.0.0",
+  "last_updated": "2026-09-26",
+  "project": "ShelfSense AI - Bookstore Spine Detection & Hybrid Recommender",
+  "models": {
+    "cv_spine_detection": {
+      "name": "YOLOv8x Spine Detector",
+      "framework": "Ultralytics YOLOv8",
+      "artifact_path": "models/best.pt",
+      "task": "object_detection",
+      "input_resolution": [640, 640, 3],
+      "target_classes": ["book_spine"],
+      "device_preference": "cuda",
+      "fallback": "cpu"
+    },
+    "text_ocr": {
+      "name": "PaddleOCR Mobile V4",
+      "framework": "PaddleOCR",
+      "execution_mode": "subprocess_isolated",
+      "lang": "en",
+      "target": "crop_text_extraction"
+    },
+    "vision_disambiguation_llm": {
+      "name": "Gemma 3 4B Vision",
+      "framework": "Ollama",
+      "endpoint": "http://localhost:11434",
+      "model_tag": "gemma3:4b",
+      "gpu_offload": "100%",
+      "temperature": 0.0,
+      "task": "spine_disambiguation"
+    },
+    "semantic_embeddings": {
+      "name": "all-MiniLM-L6-v2",
+      "framework": "SentenceTransformers / PyTorch",
+      "dimension": 384,
+      "normalization": "L2_unit_sphere",
+      "distance_metric": "cosine_similarity / inner_product",
+      "vector_index": "FAISS IndexFlatIP",
+      "artifact_path": "models/book_embeddings.npy",
+      "catalog_metadata": "models/book_catalog.csv"
+    },
+    "collaborative_filtering": {
+      "name": "Item-Item Top-K Cosine Graph",
+      "framework": "Scikit-Learn / SciPy Sparse",
+      "artifact_path": "models/item_top_neighbors.pkl",
+      "top_k_per_book": 50,
+      "metric": "cosine",
+      "catalog_size": 291828
+    },
+    "implicit_bpr": {
+      "name": "Bayesian Personalized Ranking (BPR)",
+      "framework": "Implicit / Matrix Factorization",
+      "artifact_path": "models/bpr_model.pkl",
+      "latent_factors": 64,
+      "learning_rate": 0.05,
+      "regularization": 0.01,
+      "user_encoder": "models/user_encoder.pkl"
+    }
+  },
+  "datasets": {
+    "book_crossing_core": {
+      "total_books": 291828,
+      "date_cutoff": 2004,
+      "database": "backend/bookshelf.db"
+    },
+    "curated_modern_catalog": {
+      "total_embedded_books": 6120,
+      "embedding_file": "models/book_embeddings.npy"
+    },
+    "dynamic_enrichment_source": {
+      "provider": "OpenLibrary Public API",
+      "strategy": "on_the_fly_cache",
+      "rate_limit_safe": true
+    }
+  }
+}
