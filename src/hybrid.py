@@ -14,7 +14,8 @@ from src.content_based import (
     get_genre_overlap_score
 )
 
-DATA_DIR = r"c:\Users\anshu\Documents\codes\ML\BookRecomendation\data"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 
 # Global popularity cache
 _popularity_dict = {}

@@ -16,8 +16,9 @@ from sqlalchemy.orm import Session
 # Import database Book model if needed
 from backend.database import Book
 
-MODELS_DIR = r"c:\Users\anshu\Documents\codes\ML\BookRecomendation\models"
-EMBEDDINGS_DIR = r"c:\Users\anshu\Documents\codes\ML\BookRecomendation\embeddings"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
+EMBEDDINGS_DIR = os.path.join(PROJECT_ROOT, "embeddings")
 
 # Ensure embeddings directory exists
 os.makedirs(EMBEDDINGS_DIR, exist_ok=True)

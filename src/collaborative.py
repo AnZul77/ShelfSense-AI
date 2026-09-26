@@ -12,8 +12,9 @@ import numpy as np
 import pandas as pd
 from collections import defaultdict
 
-MODELS_DIR = r"c:\Users\anshu\Documents\codes\ML\BookRecomendation\models"
-DATA_DIR = r"c:\Users\anshu\Documents\codes\ML\BookRecomendation\data"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 
 class BPRModel(nn.Module):
     def __init__(self, n_users, n_books, embedding_dim=50):

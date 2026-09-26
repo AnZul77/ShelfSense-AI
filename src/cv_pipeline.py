@@ -19,8 +19,9 @@ import src.numpy_compat
 from src.matching import match_book_entity, match_ocr_query
 from src.hybrid import hybrid_recommend_shelf
 
-YOLO_MODEL_PATH = r"c:\Users\anshu\Documents\codes\ML\BookRecomendation\runs\detect\train\weights\best.pt"
-UPLOADS_DIR = r"c:\Users\anshu\Documents\codes\ML\BookRecomendation\backend\uploads"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+YOLO_MODEL_PATH = os.path.join(PROJECT_ROOT, "models", "best.pt")
+UPLOADS_DIR = os.path.join(PROJECT_ROOT, "backend", "uploads")
 
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
